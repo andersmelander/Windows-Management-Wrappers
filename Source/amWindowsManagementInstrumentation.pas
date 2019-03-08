@@ -7,9 +7,9 @@ unit amWindowsManagementInstrumentation;
 
 (*
 
-Example of usage:
+Examples of usage:
 
-// Calls a method on an instance and extracts the result.
+// Call a method on an instance and extract the result.
 var
   WindowsManagement: IWindowsManagement;
   Method: IWindowsManagementObjectMethod;
@@ -22,10 +22,9 @@ const
 begin
   WindowsManagement := ConnectWindowsManagement(Scope);
   try
-
     Method := WindowsManagement.Objects[ClassName].Instances.First.Methods[MethodName];
 
-    Method.Params['DatabaseName'] := '''ReportServer''';
+    Method.Params['DatabaseName'] := 'ReportServer';
     Method.Params['Lcid'] := 1033;
     Method.Params['IsSharePointMode'] := False;
 
@@ -39,9 +38,74 @@ begin
   end;
 end;
 
+// Same as above using anonymous method parameters.
+var
+  WindowsManagement: IWindowsManagement;
+  Instance: IWindowsManagementInstanceObject;
+  Method: IWindowsManagementObjectMethod;
+  MethodResult: IWindowsManagementObjectMethodResult;
+  Script: string;
+const
+  Scope = '\root\Microsoft\SqlServer\ReportServer\RS_SSRS\V14\Admin';
+  ClassName = 'MSReportServer_ConfigurationSetting';
+  MethodName = 'GenerateDatabaseCreationScript';
+begin
+  WindowsManagement := ConnectWindowsManagement(Scope);
+  try
+    Instance := WindowsManagement.Objects[ClassName].Instances.First;
+
+    Script := VarToStr(Instance.Methods[MethodName].Execute(['ReportServer', 1033, False])['Script']);
+
+    ShowMessage(Script);
+  finally
+    WindowsManagement := nil;
+  end;
+end;
+
+// Same as above using late binding via custom variant type.
+var
+  WindowsManagement: IWindowsManagement;
+  Instance: Variant;
+  Script: string;
+const
+  Scope = '\root\Microsoft\SqlServer\ReportServer\RS_SSRS\V14\Admin';
+  ClassName = 'MSReportServer_ConfigurationSetting';
+begin
+  WindowsManagement := ConnectWindowsManagement(Scope);
+  try
+    Instance := WindowsManagementObject(WindowsManagement.Objects[ClassName].Instances.First);
+
+    Script := VarToStr(Instance.GenerateDatabaseCreationScript('ReportServer', 1033, False).Script);
+
+    ShowMessage(Script);
+  finally
+    WindowsManagement := nil;
+  end;
+end;
+
+// Same as above using late binding via IDispatch intercept.
+var
+  WindowsManagement: IWindowsManagement;
+  Instance: Variant;
+  Script: string;
+const
+  Scope = '\root\Microsoft\SqlServer\ReportServer\RS_SSRS\V14\Admin';
+  ClassName = 'MSReportServer_ConfigurationSetting';
+begin
+  WindowsManagement := ConnectWindowsManagement(Scope);
+  try
+    Instance := WindowsManagement.Objects[ClassName].Instances.First;
+
+    Script := VarToStr(Instance.GenerateDatabaseCreationScript('ReportServer', 1033, False).Script);
+
+    ShowMessage(Script);
+  finally
+    WindowsManagement := nil;
+  end;
+end;
 
 
-// Executes a WMI query and extracts values from the result.
+// Execute a WMI query and extract values from the result.
 var
   WindowsManagement: IWindowsManagement;
   Instances: IWindowsManagementInstanceList;
@@ -69,27 +133,9 @@ interface
 
 uses
   JwaWbemCli,
-  Generics.Collections,
   ComObj,
   SysUtils,
   Windows;
-
-// COAUTHIDENTITY Structure
-// http://msdn.microsoft.com/en-us/library/ms693358%28v=vs.85%29.aspx
-type
-  PCOAUTHIDENTITY    = ^TCOAUTHIDENTITY;
-  _COAUTHIDENTITY    = record
-    User           : PChar;
-    UserLength     : ULONG;
-    Domain         : PChar;
-    DomainLength   : ULONG;
-    Password       : PChar;
-    PassWordLength : ULONG;
-    Flags          : ULONG;
-  end;
-
-  COAUTHIDENTITY      = _COAUTHIDENTITY;
-  TCOAUTHIDENTITY     = _COAUTHIDENTITY;
 
 //------------------------------------------------------------------------------
 //
@@ -259,8 +305,13 @@ procedure WindowsManagementInitializeSecurity(LocalConnection: boolean);
 //      Error handling
 //
 //------------------------------------------------------------------------------
+// WmiCheck() is used to check the result of a WMI API call.
+// It throws an EWMIError exception on error.
+//------------------------------------------------------------------------------
+procedure WmiCheck(ErrorCode: HRESULT);
+
 type
-  EWMI = class(EOleSysError)
+  EWMIError = class(EOleSysError)
   public
     constructor Create(ErrorCode: HRESULT);
   end;
@@ -271,6 +322,8 @@ type
 //      Custom variants
 //
 //------------------------------------------------------------------------------
+// Wrap an IWindowsManagementObject in an invokable custom variant.
+//------------------------------------------------------------------------------
 function WindowsManagementObject(const AWindowsManagementObject: IWindowsManagementObject = nil): Variant;
 
 
@@ -278,6 +331,15 @@ function WindowsManagementObject(const AWindowsManagementObject: IWindowsManagem
 //
 //      Variant array enumerator
 //
+//------------------------------------------------------------------------------
+// Usage:
+// var
+//   VarArray: Variant;
+//   Value: Variant;
+// begin
+//   for Value in OleVariantArrayEnum(VarArray) do
+//     ...do something with Value...
+// end;
 //------------------------------------------------------------------------------
 type
   IOleVariantEnum  = interface
@@ -290,7 +352,10 @@ type
     function GetEnumerator: IOleVariantEnum;
   end;
 
+// Make an IEnumVARIANT enumerable
 function OleVariantEnum(const Collection: OleVariant): IGetOleVariantEnum;
+
+// Make a variant array enumerable
 function OleVariantArrayEnum(const Collection: OleVariant): IGetOleVariantEnum;
 
 //------------------------------------------------------------------------------
@@ -300,6 +365,7 @@ function OleVariantArrayEnum(const Collection: OleVariant): IGetOleVariantEnum;
 implementation
 
 uses
+  Generics.Collections,
   JwaActiveX,
   VarUtils,
   ActiveX,
@@ -344,10 +410,10 @@ const
 procedure WmiCheck(ErrorCode: HRESULT);
 begin
   if (not Succeeded(ErrorCode)) then
-    raise EWMI.Create(ErrorCode);
+    raise EWMIError.Create(ErrorCode);
 end;
 
-constructor EWMI.Create(ErrorCode: HRESULT);
+constructor EWMIError.Create(ErrorCode: HRESULT);
 var
  pStatus: IWbemStatusCodeText;
  MessageText: WideString;
@@ -356,7 +422,14 @@ begin
 
   if (Succeeded(CoCreateInstance(CLSID_WbemStatusCodeText, nil, CLSCTX_INPROC_SERVER, IID_IWbemStatusCodeText, pStatus))) then
   begin
-    if (not Succeeded(pStatus.GetErrorCodeText(ErrorCode, 0, 0, MessageText))) then
+    if (Succeeded(pStatus.GetErrorCodeText(ErrorCode, 0, 0, MessageText))) then
+    begin
+      // Trim trailing CR/LFs
+{$WARN WIDECHAR_REDUCED OFF}
+      while (Length(MessageText) > 0) and (MessageText[Length(MessageText)] in [#13, #10]) do
+        SetLength(MessageText, Length(MessageText)-1);
+{$WARN WIDECHAR_REDUCED DEFAULT}
+    end else
       MessageText := '';
   end else
     MessageText := '';
@@ -364,6 +437,12 @@ begin
   inherited Create(MessageText, ErrorCode, 0)
 end;
 
+
+//------------------------------------------------------------------------------
+//
+//      IWindowsManagementInternal
+//
+//------------------------------------------------------------------------------
 type
   IWindowsManagementInternal = interface(IWindowsManagement)
     function GetServices: IWbemServices;
@@ -412,7 +491,9 @@ type
     property IsSingleton: boolean read GetIsSingleton;
 
     property ClassObject: IWindowsManagementClassObject read GetClassObject;
+{$WARN HIDING_MEMBER OFF}
     property ClassName: string read GetClassName;
+{$WARN HIDING_MEMBER DEFAULT}
     property KeyName: string read GetKeyName;
     property Path: string read GetPath;
     property RelativePath: string read GetRelativePath;
@@ -437,6 +518,7 @@ type
   private
     FOutParams: IWbemClassObject;
   protected
+    function GetParamNames: string; // For debug use only
     // IWindowsNameSpaceMethodResult
     function GetParam(const AName: string): Variant;
   public
@@ -449,15 +531,57 @@ begin
   FOutParams := AOutParams;
 end;
 
+function TWindowsManagementObjectMethodResult.GetParamNames: string;
+var
+  ErrorCode: HRESULT;
+  ParamName: WideString;
+type
+  POleVariant = ^OleVariant;
+  PCIMTYPE = ^CIMTYPE;
+begin
+  Result := '';
+  WmiCheck(FOutParams.BeginEnumeration(WBEM_FLAG_NONSYSTEM_ONLY));
+  try
+
+    while (True) do
+    begin
+      // Get the parameter name
+      ErrorCode := FOutParams.Next(0, ParamName, POleVariant(nil)^, PCIMTYPE(nil)^, PInteger(nil)^);
+      WmiCheck(ErrorCode);
+
+      if (Result <> '') then
+        Result := Result + #13;
+      Result := Result + ParamName;
+
+      if (ErrorCode = HRESULT(WBEM_S_NO_MORE_DATA)) then
+        // No more params
+        break;
+    end;
+
+  finally
+    WmiCheck(FOutParams.EndEnumeration);
+  end;
+end;
+
 function TWindowsManagementObjectMethodResult.GetParam(const AName: string): Variant;
 var
   Value: OleVariant;
+  Res: HResult;
 begin
-  FOutParams.Get(PWideChar(AName), 0, Value, PInteger(nil)^, PInteger(nil)^);
+  Res := FOutParams.Get(PWideChar(AName), 0, Value, PInteger(nil)^, PInteger(nil)^);
+  if (Succeeded(Res)) then
+  begin
   try
     Result := Value;
   finally
     VariantClear(Value);
+  end;
+  end else
+  begin
+    if (DWORD(Res) = WBEM_E_NOT_FOUND) then
+      Result := Unassigned
+    else
+      WmiCheck(Res);
   end;
 end;
 
@@ -518,9 +642,11 @@ var
   ErrorCode: HRESULT;
   ParamName: WideString;
   QualSet: IWbemQualifierSet;
-  Value: OleVariant;
+  OleValue: OleVariant;
+  Value: Variant;
   Index: integer;
   Name: string;
+  s: string;
 begin
   if (Length(Params) > 0) then
   begin
@@ -547,12 +673,12 @@ begin
           WmiCheck(FParamsDefinition.GetPropertyQualifierSet(PChar(ParamName), QualSet));
 
           // Get the parameter order
-          WmiCheck(QualSet.Get('ID', 0, Value, PInteger(nil)^));
+          WmiCheck(QualSet.Get('ID', 0, OleValue, PInteger(nil)^));
           try
             // Save order/name pair
-            OrderedParams.Add(integer(Value), ParamName);
+            OrderedParams.Add(integer(OleValue), ParamName);
           finally
-            VariantClear(Value);
+            VariantClear(OleValue);
           end;
         end;
 
@@ -566,7 +692,17 @@ begin
         if (not OrderedParams.TryGetValue(Index, Name)) then
           break;
 
-        SetParam(Name, Params[Index]);
+        Value := Params[Index];
+
+        // Work around "The parameter is incorrect" when passing empty string values
+        if (VarIsStr(Value)) then
+        begin
+          s := Value;
+          if (s = '') then
+            Value := #0;
+        end;
+
+        SetParam(Name, Value);
       end;
 
     finally
@@ -606,7 +742,7 @@ begin
 
   Val := Value;
 
-  FParamsInstance.Put(PWideChar(AName), 0, @Val, 0);
+  WmiCheck(FParamsInstance.Put(PWideChar(AName), 0, @Val, 0));
 end;
 
 //------------------------------------------------------------------------------
@@ -1193,6 +1329,23 @@ end;
 //------------------------------------------------------------------------------
 // Wraps a WMI connection and scope/namespace
 //------------------------------------------------------------------------------
+// COAUTHIDENTITY Structure
+// http://msdn.microsoft.com/en-us/library/ms693358%28v=vs.85%29.aspx
+type
+  PCOAUTHIDENTITY    = ^TCOAUTHIDENTITY;
+  _COAUTHIDENTITY    = record
+    User           : PChar;
+    UserLength     : ULONG;
+    Domain         : PChar;
+    DomainLength   : ULONG;
+    Password       : PChar;
+    PassWordLength : ULONG;
+    Flags          : ULONG;
+  end;
+
+  COAUTHIDENTITY      = _COAUTHIDENTITY;
+  TCOAUTHIDENTITY     = _COAUTHIDENTITY;
+
 type
   TWindowsManagement = class(TInterfacedObject, IWindowsManagement, IWindowsManagementInternal)
   strict private
@@ -1528,7 +1681,7 @@ type
   end;
 
 var
-  FWindowsManagementVariantType: TWindowsManagementObjectVariantType;
+  FWindowsManagementVariantType: TWindowsManagementObjectVariantType = nil;
 
 procedure TWindowsManagementObjectVariantType.Cast(var Dest: TVarData; const Source: TVarData);
 begin
